@@ -4,7 +4,6 @@ using System.Linq;
 
 namespace SoftwareCamera
 {
-    // Both ends of the range are inclusive.
     public class ValueRange
     {
         public double Min { get; }
@@ -20,6 +19,8 @@ namespace SoftwareCamera
         }
 
         public bool Contains(double value) => value >= Min && value <= Max;
+
+        public bool Overlaps(ValueRange other) => Min <= other.Max && other.Min <= Max;
     }
 
     public class CameraSpec
@@ -37,28 +38,36 @@ namespace SoftwareCamera
         {
             return Distance.Contains(distance) && Light.Contains(light);
         }
+
+        public bool Overlaps(CameraSpec other)
+        {
+            return Distance.Overlaps(other.Distance) && Light.Overlaps(other.Light);
+        }
     }
 
     public static class CameraCoverage
     {
-        // Splits the desired area into cells along every camera edge,
-        // then checks that the center of each cell is covered by some camera.
+        // Splits the desired area into cells along every camera edge and then checks that the center of each cell is covered by some camera
         public static bool CamerasSuffice(CameraSpec desired, List<CameraSpec> cameras)
         {
             if (desired == null)
                 throw new ArgumentNullException(nameof(desired));
+            if (cameras == null)
+                throw new ArgumentNullException(nameof(cameras));
 
-            if (cameras == null || cameras.Count == 0)
+            // Cameras outside the desired area can't help, so just skip em
+            List<CameraSpec> useful = cameras.Where(c => c.Overlaps(desired)).ToList();
+            if (useful.Count == 0)
                 return false;
 
-            List<double> distancePoints = GetSamplePoints(desired.Distance, cameras.Select(c => c.Distance));
-            List<double> lightPoints = GetSamplePoints(desired.Light, cameras.Select(c => c.Light));
+            List<double> distancePoints = GetSamplePoints(desired.Distance, useful.Select(c => c.Distance));
+            List<double> lightPoints = GetSamplePoints(desired.Light, useful.Select(c => c.Light));
 
             foreach (double distance in distancePoints)
             {
                 foreach (double light in lightPoints)
                 {
-                    bool covered = cameras.Any(c => c.CanHandle(distance, light));
+                    bool covered = useful.Any(c => c.CanHandle(distance, light));
                     if (!covered)
                         return false;
                 }
@@ -67,7 +76,25 @@ namespace SoftwareCamera
             return true;
         }
 
-        // Returns the midpoint between each pair of neighboring edges on one axis.
+        // Returns the positions of cameras that don't overlap the desired area at all
+        public static List<int> FindUnusedCameras(CameraSpec desired, List<CameraSpec> cameras)
+        {
+            if (desired == null)
+                throw new ArgumentNullException(nameof(desired));
+            if (cameras == null)
+                throw new ArgumentNullException(nameof(cameras));
+
+            var unused = new List<int>();
+            for (int i = 0; i < cameras.Count; i++)
+            {
+                if (!cameras[i].Overlaps(desired))
+                    unused.Add(i);
+            }
+
+            return unused;
+        }
+
+        // Returns the midpoint between each pair of neighboring edges on one axis
         private static List<double> GetSamplePoints(ValueRange target, IEnumerable<ValueRange> cameraRanges)
         {
             // Single value, nothing to split up
@@ -113,6 +140,21 @@ namespace SoftwareCamera
                 desired,
                 Camera(1, 6, 1, 5),
                 Camera(5, 10, 1, 3));
+
+            Check("Cameras meet exactly at an edge", true,
+                desired,
+                Camera(1, 5, 1, 5),
+                Camera(5, 10, 1, 5));
+
+            Check("Tiny gap between cameras", false,
+                desired,
+                Camera(1, 4.99, 1, 5),
+                Camera(5, 10, 1, 5));
+
+            CheckUnused("Camera outside the range is reported", new List<int> { 1 },
+                desired,
+                Camera(1, 10, 1, 5),
+                Camera(20, 30, 1, 5));
         }
 
         private static CameraSpec Camera(double minDist, double maxDist, double minLight, double maxLight)
@@ -125,6 +167,13 @@ namespace SoftwareCamera
             bool actual = CameraCoverage.CamerasSuffice(desired, cameras.ToList());
             string result = actual == expected ? "PASS" : "FAIL";
             Console.WriteLine($"{result}  {name} (expected {expected}, got {actual})");
+        }
+
+        private static void CheckUnused(string name, List<int> expected, CameraSpec desired, params CameraSpec[] cameras)
+        {
+            List<int> actual = CameraCoverage.FindUnusedCameras(desired, cameras.ToList());
+            string result = actual.SequenceEqual(expected) ? "PASS" : "FAIL";
+            Console.WriteLine($"{result}  {name} (expected [{string.Join(", ", expected)}], got [{string.Join(", ", actual)}])");
         }
     }
 }
